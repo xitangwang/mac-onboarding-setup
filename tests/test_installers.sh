@@ -73,6 +73,9 @@ if grep -qF 'INSTALLER_LIB_ONLY' "$ROOT/install.sh"; then
   assert_true 'Codex desktop supports Apple Silicon macOS 14' codex_app_supported_on_mac arm64 14
   assert_false 'Codex desktop rejects macOS 13' codex_app_supported_on_mac arm64 13
   assert_true 'Codex desktop exposes an automatic installer' function_exists install_codex_desktop_app
+  codex_desktop_app_installed(){ return 0; }
+  desktop_detect_output=$(detect)
+  assert_contains "$desktop_detect_output" 'ChatGPT 桌面 App（内含 Codex）—— 已装' 'macOS detection reports the merged ChatGPT/Codex desktop app'
   if function_exists node_archive_arch; then
     assert_eq "$(node_archive_arch arm64)" 'darwin-arm64' 'Node maps Apple Silicon correctly'
     assert_eq "$(node_archive_arch x86_64)" 'darwin-x64' 'Node maps Intel correctly'

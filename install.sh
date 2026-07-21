@@ -421,9 +421,9 @@ detect(){
   lark_skills_ok   && ok "飞书官方 Agent Skills —— 已装"                                      || warn "飞书官方 Agent Skills —— 未补齐（装飞书 CLI 时会一起补）"
   say "${BOLD}  ▸ 桌面 App / 知识库${RST}"
   obsidian_installed && ok "Obsidian —— 已装" || err "Obsidian —— 未装"
-  if ls -d /Applications/Codex*.app >/dev/null 2>&1; then ok "Codex 桌面 App —— 已装"
-  elif codex_app_supported_on_mac "$ARCH" "$MACOS_MAJOR"; then say "  ◦ Codex 桌面 App —— 未装（可选，macOS 14+）"
-  else say "  ◦ Codex 桌面 App —— 当前系统不支持（需要 macOS 14+）"; fi
+  if codex_desktop_app_installed; then ok "ChatGPT 桌面 App（内含 Codex）—— 已装"
+  elif codex_app_supported_on_mac "$ARCH" "$MACOS_MAJOR"; then say "  ◦ ChatGPT 桌面 App（内含 Codex）—— 未装（可选，macOS 14+）"
+  else say "  ◦ ChatGPT 桌面 App（内含 Codex）—— 当前系统不支持（需要 macOS 14+）"; fi
   if ! hermes_supported_on_mac "$ARCH" "$MACOS_MAJOR"; then
     warn "Hermes 官方不支持当前 Mac：需要 Apple Silicon 且 macOS 12+；本机将跳过 Hermes。"
   fi
