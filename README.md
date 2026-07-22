@@ -55,6 +55,14 @@ cmd /k powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:CHECK_ONLY=1
 
 交互提示中：回车表示继续，`s` 表示跳过，`q` 表示退出。安装后建议重开终端再验证。
 
+### 实时进度说明
+
+- Mac 下载 Node.js、Obsidian、ChatGPT 和 Hermes 桌面安装包时，会显示实时百分比，并在结束时显示总耗时。
+- Windows 的 Node.js、Obsidian 和 Microsoft Store 安装会显示 winget 原生下载 / 安装进度，并持续显示已用时间。
+- Windows 直接下载 Codex 辅助程序或 Hermes 桌面安装包时，如果下载源提供总大小，会显示已下载大小、总大小、百分比和耗时；否则显示已下载大小和耗时。
+- Codex、Hermes、飞书 CLI 等官方安装器如果没有提供总工作量，脚本不会伪造百分比，而是保留官方实时输出并显示当前阶段和总耗时。
+- 如果安装过程中出现 UAC 权限确认窗口，需要手动点击允许；终端会持续提示查看 UAC。
+
 ## 设备兼容范围
 
 | 设备 | 支持情况 |

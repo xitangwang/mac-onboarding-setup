@@ -12,6 +12,7 @@
 
 try { chcp 65001 > $null 2>&1; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 $ErrorActionPreference = 'Continue'
+$ProgressPreference = 'Continue'
 
 # ---------- 输出（纯文本标记，避免乱码）----------
 function Say($m){ Write-Host $m }
@@ -20,6 +21,83 @@ function Warn($m){ Write-Host "[!]  $m" -ForegroundColor Yellow }
 function Bad($m){ Write-Host "[X]  $m" -ForegroundColor Red }
 function Step($m){ Write-Host ""; Write-Host ">> $m" -ForegroundColor Cyan }
 function Hr(){ Write-Host "--------------------------------------------" }
+
+function Format-Elapsed($started){
+  $span = (Get-Date) - $started
+  if($span.TotalHours -ge 1){ return ("{0}小时{1}分{2}秒" -f [int]$span.TotalHours,$span.Minutes,$span.Seconds) }
+  if($span.TotalMinutes -ge 1){ return ("{0}分{1}秒" -f [int]$span.TotalMinutes,$span.Seconds) }
+  return ("{0}秒" -f [Math]::Max(0,[int]$span.TotalSeconds))
+}
+function Format-Bytes($bytes){
+  if($bytes -ge 1GB){ return ("{0:N2} GB" -f ($bytes / 1GB)) }
+  if($bytes -ge 1MB){ return ("{0:N1} MB" -f ($bytes / 1MB)) }
+  if($bytes -ge 1KB){ return ("{0:N1} KB" -f ($bytes / 1KB)) }
+  return ("$bytes B")
+}
+function Invoke-DownloadWithProgress {
+  param(
+    [Parameter(Mandatory=$true)][string]$Url,
+    [Parameter(Mandatory=$true)][string]$Destination,
+    [Parameter(Mandatory=$true)][string]$Name
+  )
+  $request=$null; $response=$null; $input=$null; $output=$null; $downloadFailed=$false
+  $received=[long]0; $total=[long]-1; $started=Get-Date
+  try {
+    $request = [System.Net.HttpWebRequest]::Create($Url)
+    $request.AllowAutoRedirect = $true
+    $request.UserAgent = 'Mozilla/5.0 NavigatorInstaller/1.0'
+    $request.Timeout = 30000
+    $request.ReadWriteTimeout = 30000
+    $request.Proxy = [System.Net.WebRequest]::GetSystemWebProxy()
+    if($request.Proxy){ $request.Proxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials }
+    $response = $request.GetResponse()
+    $total = [long]$response.ContentLength
+    $input = $response.GetResponseStream()
+    $output = New-Object System.IO.FileStream($Destination,[System.IO.FileMode]::Create,[System.IO.FileAccess]::Write,[System.IO.FileShare]::None)
+    $buffer = New-Object byte[] 65536
+    while(($read = $input.Read($buffer,0,$buffer.Length)) -gt 0){
+      $output.Write($buffer,0,$read)
+      $received += $read
+      $elapsed = Format-Elapsed $started
+      if($total -gt 0){
+        $percent = [Math]::Min(100,[int](($received * 100) / $total))
+        $status = "$(Format-Bytes $received) / $(Format-Bytes $total)（$percent%），已用时 $elapsed"
+        Write-Progress -Activity "下载 $Name" -Status $status -PercentComplete $percent
+      } else {
+        Write-Progress -Activity "下载 $Name" -Status "已下载 $(Format-Bytes $received)，已用时 $elapsed" -PercentComplete -1
+      }
+    }
+    if($total -gt 0 -and $received -ne $total){ throw "下载不完整：应为 $total 字节，实际 $received 字节。" }
+    Say "  $Name 下载完成：$(Format-Bytes $received)，耗时 $(Format-Elapsed $started)"
+  } catch {
+    $downloadFailed=$true
+    throw
+  } finally {
+    if($output){ $output.Dispose() }
+    if($input){ $input.Dispose() }
+    if($response){ $response.Dispose() }
+    if($downloadFailed){ Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue }
+    Write-Progress -Activity "下载 $Name" -Completed
+  }
+}
+function Invoke-NativeWithProgress($filePath,$argumentList,$activity){
+  $started=Get-Date
+  $process=$null
+  try {
+    $process = Start-Process -FilePath $filePath -ArgumentList $argumentList -PassThru -NoNewWindow -ErrorAction Stop
+    while(-not $process.WaitForExit(1000)){
+      Write-Progress -Activity $activity -Status "仍在运行，已用时 $(Format-Elapsed $started)；如有 UAC 窗口请确认" -PercentComplete -1
+    }
+    $process.WaitForExit()
+    Say "  $activity 已结束，耗时 $(Format-Elapsed $started)，返回码 $($process.ExitCode)"
+    return [int]$process.ExitCode
+  } catch {
+    Warn "$activity 启动失败：$_"
+    return 1
+  } finally {
+    Write-Progress -Activity $activity -Completed
+  }
+}
 
 # ---------- 状态记录 ----------
 $script:INSTALLED=@(); $script:SKIPPED=@(); $script:FAILED=@()
@@ -183,7 +261,7 @@ function Repair-CodexSandboxSetup {
     $release = Invoke-RestMethod -Uri "https://api.github.com/repos/openai/codex/releases/tags/rust-v$ver" -UseBasicParsing -ErrorAction Stop
     $asset = $release.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1
     if($null -eq $asset -or [string]::IsNullOrWhiteSpace("$($asset.digest)")){ return $false }
-    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $dst -UseBasicParsing -ErrorAction Stop
+    Invoke-DownloadWithProgress -Url $asset.browser_download_url -Destination $dst -Name "Codex sandbox 辅助程序"
     $expected = "$($asset.digest)" -replace '^sha256:',''
     $actual = (Get-FileHash -LiteralPath $dst -Algorithm SHA256 -ErrorAction Stop).Hash
     if($actual.ToLowerInvariant() -ne $expected.ToLowerInvariant()){
@@ -381,11 +459,10 @@ function Ensure-Winget {
 
 function Winget-Install($id, $name, $architecture=''){
   if(-not (Ensure-Winget)){ return $false }
-  Say "  正在用 winget 安装 $name（请稍候，别关窗口）……"
-  $wingetArgs = @('install','-e','--id',$id,'--accept-source-agreements','--accept-package-agreements','--silent')
+  Say "  正在用 winget 安装 $name；下面会显示下载 / 安装进度，请留意可能弹出的 UAC 窗口……"
+  $wingetArgs = @('install','-e','--id',$id,'--accept-source-agreements','--accept-package-agreements')
   if($architecture -eq 'arm64'){ $wingetArgs += @('--architecture','arm64') }
-  winget @wingetArgs
-  $rc = $LASTEXITCODE
+  $rc = Invoke-NativeWithProgress 'winget' $wingetArgs "$name 安装"
   $script:LAST_WINGET_CODE = $rc
   Refresh-Path
   if($rc -ne 0 -and $rc -ne -1978335189){
@@ -502,7 +579,9 @@ function Do-Codex {
   if(-not (Ask "现在安装 Codex？")){ $script:SKIPPED+="Codex"; return }
   Say "  正在下载安装（官方 PowerShell 安装器）……"
   $ok=$true
+  $started=Get-Date
   try { Install-CodexOfficial } catch { $ok=$false; Warn "安装过程报错：$_" }
+  Say "  Codex 官方安装器已结束，耗时 $(Format-Elapsed $started)"
   Refresh-Path
   Ensure-CodexPath | Out-Null
   $codexExe = Join-Path (Codex-BinDir) "codex.exe"
@@ -533,14 +612,16 @@ function Do-Hermes {
   Step "Hermes Agent —— 能成长的 AI 助手"
   if(Cmd-Usable 'hermes'){ Ok "已安装"; $script:SKIPPED+="Hermes"; return }
   if(-not (Ask "现在安装 Hermes？（会自动装 Git/Python/Node 等依赖，耗时几分钟）")){ $script:SKIPPED+="Hermes"; return }
-  Say "  正在装 Hermes：只安装本体和环境，不进入 Hermes 配置向导；会下 uv / Python / Node 等依赖，正常首次 5-15 分钟、没进度条别慌。"
+  Say "  正在装 Hermes：官方安装器会实时输出当前阶段；无法计算总百分比时请看阶段文字和耗时。"
   Warn "卡在某一步（如 Installing managed uv）超过 10 分钟完全不动 = 网络/Cloudflare 拦了下载：按 Ctrl+C 中断，先跳过 Hermes，换干净网络/IP 再单独装。"
   $ok=$true
+  $started=Get-Date
   try {
     $installer = Invoke-RestMethod https://hermes-agent.nousresearch.com/install.ps1 -ErrorAction Stop
     $installerBlock = [ScriptBlock]::Create("$installer")
     & $installerBlock -SkipSetup
   } catch { $ok=$false; Warn "安装过程报错：$_" }
+  Say "  Hermes 官方安装器已结束，耗时 $(Format-Elapsed $started)"
   Refresh-Path
   Add-UserPathEntry (Hermes-BinDir) | Out-Null
   if(Cmd-Usable 'hermes'){ Ok "Hermes 安装成功"; $script:INSTALLED+="Hermes" }
@@ -584,8 +665,7 @@ function Do-Larkcli {
   }
   if(-not (Ask "现在安装 / 补齐飞书 CLI + 官方 AI Agent Skills？")){ $script:SKIPPED+="飞书 CLI"; return }
   Say "  通过官方安装器安装：CLI 本体 + 飞书官方 AI Agent Skills 会一起装好……"
-  cmd /c "npx --yes @larksuite/cli@latest install"
-  $rc=$LASTEXITCODE
+  $rc=Invoke-NativeWithProgress 'cmd.exe' @('/d','/c','npx --yes @larksuite/cli@latest install') '飞书 CLI 安装'
   Refresh-Path
   foreach($dir in (Npm-BinDirs)){ Add-UserPathEntry $dir | Out-Null }
   if((Cmd-Usable 'lark-cli') -and (Lark-SkillsOk)){ Ok "飞书 CLI + 官方 Agent Skills 安装成功"; $script:INSTALLED+="飞书 CLI（含官方 Agent Skills）" }
@@ -654,9 +734,10 @@ function Do-Clients {
   if(Pkg-Installed '9PLM9XGG6VKS'){ Ok "Codex 桌面 App 已安装" }
   elseif(Ask "现在装 Codex 桌面 App？（走 Microsoft 商店）"){
     if(Ensure-Winget){
-      Say "  正在从 Microsoft Store 安装 Codex App……"
-      winget install -e --id 9PLM9XGG6VKS -s msstore --accept-source-agreements --accept-package-agreements
-      if($LASTEXITCODE -eq 0){ Ok "Codex 桌面 App 安装成功（开始菜单搜 Codex 打开）"; $script:INSTALLED+="Codex 桌面 App" }
+      Say "  正在从 Microsoft Store 安装 Codex App；winget 会显示可用的下载 / 安装进度……"
+      $storeArgs=@('install','-e','--id','9PLM9XGG6VKS','-s','msstore','--accept-source-agreements','--accept-package-agreements')
+      $storeRc=Invoke-NativeWithProgress 'winget' $storeArgs 'Codex 桌面 App 安装'
+      if($storeRc -eq 0){ Ok "Codex 桌面 App 安装成功（开始菜单搜 Codex 打开）"; $script:INSTALLED+="Codex 桌面 App" }
       else { Warn "Codex App 没装成功（商店源可能要登录或网络问题）。可去 Microsoft Store 搜 Codex 手动装。" }
     }
   }
@@ -664,16 +745,17 @@ function Do-Clients {
   Say ""
   Say "2) Hermes 桌面 App（图形界面，比命令行友好；和命令行 Hermes 共享同一份配置）"
   if(Cmd-Usable 'hermes'){
-    Say "  你已装命令行 Hermes，最省事：用官方命令 hermes desktop 后台构建并打开桌面 App（首次几分钟）。"
-    if(Ask "现在后台构建并打开 Hermes 桌面 App？（后台跑、不打断后面流程，几分钟后自动打开）"){
-      Start-Process -FilePath "cmd.exe" -ArgumentList "/d /c hermes desktop" -WindowStyle Hidden
-      Ok "已在后台开始构建 Hermes 桌面 App（几分钟后自动打开；若没反应可去 https://hermes-agent.nousresearch.com/desktop 下安装包）。"
+    Say "  你已装命令行 Hermes，可用官方命令 hermes desktop 构建并打开桌面 App（首次几分钟，会显示实时输出和耗时）。"
+    if(Ask "现在构建并打开 Hermes 桌面 App？（完成后脚本再继续）"){
+      $desktopRc=Invoke-NativeWithProgress 'cmd.exe' @('/d','/c','hermes desktop') 'Hermes 桌面 App 构建'
+      if($desktopRc -eq 0){ Ok "Hermes 桌面 App 构建流程已结束；如成功会自动打开。" }
+      else { Warn "Hermes 桌面 App 构建失败（返回码 $desktopRc）；可去 https://hermes-agent.nousresearch.com/desktop 下载安装包。" }
     }
   } elseif(Ask "下载并运行 Hermes 桌面 App 安装包？"){
     $exe=Join-Path $env:TEMP ("Hermes-Setup-{0}.exe" -f [guid]::NewGuid().ToString('N'))
     Say "  正在下载（官方源，约 8MB）……"
     try {
-      Invoke-WebRequest -Uri "https://hermes-assets.nousresearch.com/Hermes-Setup.exe" -OutFile $exe -ErrorAction Stop
+      Invoke-DownloadWithProgress -Url "https://hermes-assets.nousresearch.com/Hermes-Setup.exe" -Destination $exe -Name "Hermes 桌面 App"
       $signature = Get-AuthenticodeSignature -LiteralPath $exe
       if($signature.Status -ne 'Valid'){ throw "安装包数字签名无效：$($signature.Status)" }
       Start-Process $exe -Wait

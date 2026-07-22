@@ -98,13 +98,49 @@ failure_hint_from_log(){
   esac
 }
 
+format_elapsed(){
+  local seconds="${1:-0}" hours minutes
+  [ "$seconds" -lt 0 ] 2>/dev/null && seconds=0
+  hours=$((seconds / 3600))
+  minutes=$(((seconds % 3600) / 60))
+  seconds=$((seconds % 60))
+  if [ "$hours" -gt 0 ]; then printf '%s小时%s分%s秒' "$hours" "$minutes" "$seconds"
+  elif [ "$minutes" -gt 0 ]; then printf '%s分%s秒' "$minutes" "$seconds"
+  else printf '%s秒' "$seconds"
+  fi
+}
+
+download_with_progress(){
+  local label="$1" url="$2" output="$3" max_time="${4:-600}" started rc elapsed
+  started=$(date +%s)
+  say "${DIM}正在下载 $label；下面显示实时百分比和速度……${RST}"
+  curl -fL --progress-bar --show-error --connect-timeout 10 --max-time "$max_time" "$url" -o "$output"
+  rc=$?
+  elapsed=$(($(date +%s) - started))
+  if [ "$rc" -eq 0 ]; then say "${DIM}$label 下载完成，耗时 $(format_elapsed "$elapsed")。${RST}"
+  else warn "$label 下载中断（curl 返回 $rc，已用时 $(format_elapsed "$elapsed")）。"
+  fi
+  return "$rc"
+}
+
+run_with_elapsed(){
+  local label="$1" started rc elapsed
+  shift
+  started=$(date +%s)
+  "$@"
+  rc=$?
+  elapsed=$(($(date +%s) - started))
+  say "${DIM}$label 已结束，耗时 $(format_elapsed "$elapsed")，返回码 $rc。${RST}"
+  return "$rc"
+}
+
 run_downloaded_installer(){
   local shell_bin="$1" url="$2" label="$3" tmp_dir script_path log_path rc
   shift 3
   tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/navigator-installer.XXXXXX") || { err "$label：无法创建临时目录。"; return 1; }
   script_path="$tmp_dir/installer"
   log_path="$tmp_dir/install.log"
-  if ! curl -fSL --connect-timeout 10 --max-time 180 "$url" -o "$script_path" 2>"$log_path"; then
+  if ! download_with_progress "$label 安装脚本" "$url" "$script_path" 180 2> >(tee "$log_path" >&2); then
     err "$label：安装脚本下载失败（$url）。"
     tail -8 "$log_path" 2>/dev/null
     failure_hint_from_log <"$log_path"
@@ -116,7 +152,7 @@ run_downloaded_installer(){
     rm -rf "$tmp_dir"
     return 1
   fi
-  "$shell_bin" "$script_path" "$@" 2>&1 | tee "$log_path"
+  run_with_elapsed "$label 官方安装器" "$shell_bin" "$script_path" "$@" 2>&1 | tee "$log_path"
   rc=${PIPESTATUS[0]}
   if [ "$rc" -ne 0 ]; then
     err "$label：官方安装器返回错误码 $rc。"
@@ -169,8 +205,7 @@ install_codex_desktop_app(){
   dmg="$tmp_dir/ChatGPT.dmg"
   copy_log="$tmp_dir/copy.log"
 
-  say "${DIM}正在从 OpenAI 官方源下载 ChatGPT 桌面 App（内含 Codex）……${RST}"
-  if ! curl -fL --connect-timeout 10 --max-time 900 "$url" -o "$dmg" || [ ! -s "$dmg" ]; then
+  if ! download_with_progress "ChatGPT 桌面 App（内含 Codex）" "$url" "$dmg" 900 || [ ! -s "$dmg" ]; then
     err "ChatGPT 桌面安装包下载失败：$url"
     rm -rf "$tmp_dir"
     return 1
@@ -554,8 +589,7 @@ install_node(){
   tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/navigator-node.XXXXXX") || { err "无法创建 Node 临时目录（权限或磁盘问题）。"; return 1; }
   archive_path="$tmp_dir/$archive"
   sums_path="$tmp_dir/SHASUMS256.txt"
-  say "${DIM}下载 Node $ver LTS（官方包，免 brew、免密码）……${RST}"
-  if ! curl -fSL --connect-timeout 10 --max-time 300 "$url" -o "$archive_path" || [ ! -s "$archive_path" ]; then
+  if ! download_with_progress "Node $ver LTS（官方包）" "$url" "$archive_path" 300 || [ ! -s "$archive_path" ]; then
     err "Node 安装包下载失败：$url"
     rm -rf "$tmp_dir"
     return 1
@@ -617,7 +651,7 @@ do_larkcli(){
     FAILED+=("飞书 CLI（缺 npx）")
     return
   fi
-  if npx --yes @larksuite/cli@latest install; then
+  if run_with_elapsed "飞书 CLI 官方安装器" npx --yes @larksuite/cli@latest install; then
     repair_path_if_body_found
     if lark_ok && lark_skills_ok; then ok "飞书 CLI + 官方 Agent Skills 安装成功：$(command_version lark-cli)"; INSTALLED+=("飞书 CLI（含官方 Agent Skills）")
     elif lark_ok; then warn "飞书 CLI 可用，但官方 Agent Skills 没检测到；重跑安装器仍未补齐。"; FAILED+=("飞书 Agent Skills")
@@ -648,7 +682,7 @@ do_obsidian(){
       else
         tmp="$tmp_dir/Obsidian-installer.dmg"
         copy_log="$tmp_dir/copy.log"
-        if ! curl -fL --connect-timeout 10 --max-time 600 "$url" -o "$tmp"; then
+        if ! download_with_progress "Obsidian 安装包" "$url" "$tmp" 600; then
           err "Obsidian DMG 下载失败：$url"
         else
           attach_out=$(hdiutil attach "$tmp" -nobrowse 2>&1)
@@ -759,18 +793,20 @@ do_clients(){
   elif [ -d "/Applications/Hermes.app" ]; then
     ok "Hermes 桌面 App 已安装"
   elif hermes_ok; then
-    say "  你已装命令行 Hermes，${BOLD}最省事${RST}：用官方命令 ${BOLD}hermes desktop${RST} 自动构建并打开桌面 App（首次几分钟）。"
-    if ask_continue "现在后台构建并打开 Hermes 桌面 App？（后台跑、不打断后面流程，几分钟后 App 自动打开）"; then
-      nohup hermes desktop >/tmp/hermes-desktop-build.log 2>&1 &
-      ok "已在后台开始构建 Hermes 桌面 App（几分钟后自动打开；日志 /tmp/hermes-desktop-build.log，没反应可去 https://hermes-agent.nousresearch.com/desktop 下安装包）。"
+    say "  你已装命令行 Hermes，可用官方命令 ${BOLD}hermes desktop${RST} 构建并打开桌面 App（首次几分钟，会显示实时输出和耗时）。"
+    if ask_continue "现在构建并打开 Hermes 桌面 App？（完成后脚本再继续）"; then
+      if run_with_elapsed "Hermes 桌面 App 构建" hermes desktop; then
+        ok "Hermes 桌面 App 构建流程已结束；如成功会自动打开。"
+      else
+        warn "Hermes 桌面 App 构建失败；可去 https://hermes-agent.nousresearch.com/desktop 下载安装包。"
+      fi
     fi
   else
     if ask_continue "下载并打开 Hermes 桌面 App 安装包？"; then
       local desktop_tmp dmg
       desktop_tmp=$(mktemp -d "${TMPDIR:-/tmp}/navigator-hermes-desktop.XXXXXX") || { warn "无法创建 Hermes 桌面安装包临时目录。"; return; }
       dmg="$desktop_tmp/Hermes-Setup.dmg"
-      say "${DIM}正在下载（官方源，约 7MB）……${RST}"
-      if curl -fSL -o "$dmg" "https://hermes-assets.nousresearch.com/Hermes-Setup.dmg" 2>/dev/null && [ -s "$dmg" ] && hdiutil verify "$dmg" >/dev/null 2>&1; then
+      if download_with_progress "Hermes 桌面 App（约 7MB）" "https://hermes-assets.nousresearch.com/Hermes-Setup.dmg" "$dmg" 300 && [ -s "$dmg" ] && hdiutil verify "$dmg" >/dev/null 2>&1; then
         open "$dmg" 2>/dev/null
         say "  ${DIM}安装包已通过 DMG 完整性校验。在弹出的窗口里把 Hermes 图标拖进「应用程序」；临时文件位于 $desktop_tmp。${RST}"
       else

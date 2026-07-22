@@ -106,6 +106,13 @@ else
 fi
 
 assert_file_contains 'install.sh' 'SHASUMS256.txt' 'Node archive checksum is verified'
+assert_file_contains 'install.sh' 'download_with_progress()' 'macOS has a shared visible download progress helper'
+assert_file_contains 'install.sh' '--progress-bar' 'macOS large downloads show percentage progress'
+mac_progress_calls=$(grep -c 'download_with_progress ' "$ROOT/install.sh")
+assert_true 'macOS routes all user-visible payload downloads through progress helper' test "$mac_progress_calls" -ge 5
+assert_file_contains 'install.sh' 'run_with_elapsed()' 'macOS long-running installers report elapsed time'
+assert_file_not_contains 'install.sh' 'nohup hermes desktop' 'macOS Hermes desktop build is no longer hidden in the background'
+assert_file_contains 'install.sh' 'run_with_elapsed "Hermes 桌面 App 构建" hermes desktop' 'macOS Hermes desktop build shows live output and elapsed time'
 assert_file_contains 'install.sh' '[ -d "/Applications/ChatGPT.app" ]' 'macOS recognizes the current ChatGPT desktop app'
 assert_file_contains 'install.sh' 'https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg' 'macOS uses the official OpenAI desktop DMG'
 assert_file_contains 'install.sh' 'hdiutil verify "$dmg"' 'macOS verifies the OpenAI desktop DMG'
@@ -125,6 +132,17 @@ assert_file_contains 'install.ps1' 'Get-CimInstance Win32_Processor' 'Windows ar
 assert_file_contains 'install.ps1' "if((Get-WindowsArch) -eq 'ARM64')" 'Windows ARM64 is handled explicitly'
 assert_file_contains 'install.ps1' "'--architecture','arm64'" 'Node winget install requests ARM64 explicitly'
 assert_file_contains 'install.ps1' "function Node-Ok { return ((Cmd-Usable 'node') -and (Cmd-Usable 'npm')) }" 'Windows executes Node and npm health checks'
+assert_file_contains 'install.ps1' "\$ProgressPreference = 'Continue'" 'Windows enables progress rendering in the main installer'
+assert_file_contains 'install.ps1' 'function Invoke-DownloadWithProgress' 'Windows has a byte-based download percentage helper'
+assert_file_contains 'install.ps1' 'if($downloadFailed){ Remove-Item -LiteralPath $Destination' 'Windows deletes partial downloads after closing the file stream'
+assert_file_contains 'install.ps1' 'function Invoke-NativeWithProgress' 'Windows has an elapsed-time native installer helper'
+assert_file_contains 'install.ps1' 'Write-Progress' 'Windows renders live progress in the terminal'
+assert_file_not_contains 'install.ps1' "'--silent'" 'Windows winget installs no longer hide installer progress'
+assert_file_contains 'install.ps1' "Invoke-NativeWithProgress 'winget'" 'Windows winget installs use the live progress wrapper'
+assert_file_not_contains 'install.ps1' '-WindowStyle Hidden' 'Windows Hermes desktop build is no longer hidden'
+assert_file_contains 'install.ps1' "Invoke-NativeWithProgress 'cmd.exe' @('/d','/c','hermes desktop')" 'Windows Hermes desktop build shows output and elapsed time'
+windows_progress_downloads=$(grep -c 'Invoke-DownloadWithProgress -Url' "$ROOT/install.ps1")
+assert_true 'Windows routes direct payload downloads through percentage helper' test "$windows_progress_downloads" -ge 2
 assert_file_contains 'install.ps1' '$current = $env:Path' 'Windows PATH refresh preserves process-only entries'
 npm_dirs_branch=$(awk '/^function Npm-BinDirs /{found=1} found{print} found && /^}/{exit}' "$ROOT/install.ps1")
 assert_contains "$npm_dirs_branch" '$npmRc -eq 0' 'Windows ignores npm prefix output when npm exits unsuccessfully'
@@ -157,6 +175,7 @@ assert_file_not_contains 'README.md' '组长速查.md' 'README does not list mis
 assert_file_not_contains 'README.md' '直播大纲.md' 'README does not list missing livestream guide'
 assert_file_contains 'README.md' 'Intel Mac' 'README documents Intel Mac limitations'
 assert_file_contains 'README.md' 'Windows ARM64' 'README documents Windows ARM64 support'
+assert_file_contains 'README.md' '实时进度' 'README explains installer progress behavior in Chinese'
 assert_file_contains 'README.md' 'Mac 自动下载并安装官方 ChatGPT 桌面 App（内含 Codex）' 'README documents automatic Codex desktop installation'
 
 printf '\nAssertions: %s passed, %s failed\n' "$PASS_COUNT" "$FAIL_COUNT"
