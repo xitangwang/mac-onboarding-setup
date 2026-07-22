@@ -126,6 +126,11 @@ assert_file_contains 'install.ps1' "if((Get-WindowsArch) -eq 'ARM64')" 'Windows 
 assert_file_contains 'install.ps1' "'--architecture','arm64'" 'Node winget install requests ARM64 explicitly'
 assert_file_contains 'install.ps1' "function Node-Ok { return ((Cmd-Usable 'node') -and (Cmd-Usable 'npm')) }" 'Windows executes Node and npm health checks'
 assert_file_contains 'install.ps1' '$current = $env:Path' 'Windows PATH refresh preserves process-only entries'
+npm_dirs_branch=$(awk '/^function Npm-BinDirs /{found=1} found{print} found && /^}/{exit}' "$ROOT/install.ps1")
+assert_contains "$npm_dirs_branch" '$npmRc -eq 0' 'Windows ignores npm prefix output when npm exits unsuccessfully'
+assert_contains "$npm_dirs_branch" '[System.IO.Path]::IsPathRooted' 'Windows only accepts an absolute npm prefix path'
+command_file_branch=$(awk '/^function Existing-CommandFile/{found=1} found{print} found && /^}/{exit}' "$ROOT/install.ps1")
+assert_contains "$command_file_branch" 'catch { continue }' 'Windows skips malformed command directory candidates'
 assert_file_contains 'install.ps1' '32 位 Windows' '32-bit Windows gets an explicit unsupported message'
 assert_file_contains 'install.ps1' '飞书初始化失败' 'Windows reports Lark initialization failure'
 assert_file_contains 'install.ps1' '飞书授权失败' 'Windows reports Lark authorization failure'

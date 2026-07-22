@@ -250,7 +250,7 @@ function Existing-CommandFile($dirs, $files){
   foreach($dir in $dirs){
     if([string]::IsNullOrWhiteSpace($dir)){ continue }
     foreach($file in $files){
-      $path = Join-Path $dir $file
+      try { $path = Join-Path $dir $file -ErrorAction Stop } catch { continue }
       if(Test-Path $path){ return $path }
     }
   }
@@ -271,8 +271,13 @@ function Npm-BinDirs {
   $dirs = @()
   if(Has 'npm'){
     try {
-      $prefix = (& npm config get prefix 2>$null | Select-Object -First 1)
-      if(-not [string]::IsNullOrWhiteSpace($prefix)){ $dirs += $prefix.Trim() }
+      $prefixOutput = @(cmd /d /c "npm config get prefix" 2>$null)
+      $npmRc = $LASTEXITCODE
+      $prefix = ($prefixOutput | Select-Object -First 1)
+      if($npmRc -eq 0 -and -not [string]::IsNullOrWhiteSpace($prefix)){
+        $prefix = $prefix.Trim()
+        if([System.IO.Path]::IsPathRooted($prefix)){ $dirs += $prefix }
+      }
     } catch {}
   }
   if(-not [string]::IsNullOrWhiteSpace($env:APPDATA)){ $dirs += (Join-Path $env:APPDATA "npm") }
