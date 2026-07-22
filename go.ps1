@@ -23,6 +23,40 @@ try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 } catch {}
 
+$script:DiagnosticLog = $null
+$script:TranscriptActive = $false
+
+function Start-DiagnosticLog {
+    try {
+        $folder = [Environment]::GetFolderPath('Desktop')
+        if ([string]::IsNullOrWhiteSpace($folder) -or -not (Test-Path $folder)) { $folder = $env:TEMP }
+        $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        $script:DiagnosticLog = Join-Path $folder "navigator-installer-$stamp.log"
+        Start-Transcript -Path $script:DiagnosticLog -Force | Out-Null
+        $script:TranscriptActive = $true
+    } catch {
+        $script:DiagnosticLog = $null
+        $script:TranscriptActive = $false
+    }
+}
+
+function Stop-DiagnosticLog {
+    if ($script:TranscriptActive) {
+        try { Stop-Transcript | Out-Null } catch {}
+        $script:TranscriptActive = $false
+    }
+}
+
+function Wait-AfterFailure {
+    if ($script:DiagnosticLog) {
+        Write-Host "    Diagnostic log: $script:DiagnosticLog" -ForegroundColor Cyan
+    }
+    Stop-DiagnosticLog
+    try { Read-Host 'Press Enter to close this window (keep the error or diagnostic log)' | Out-Null } catch {}
+}
+
+Start-DiagnosticLog
+
 $installers = @(
     'https://github.com/xitangwang/mac-onboarding-setup/raw/main/install.ps1',
     'https://raw.githubusercontent.com/xitangwang/mac-onboarding-setup/main/install.ps1'
@@ -57,6 +91,7 @@ catch {
     Write-Host "    Also check TLS 1.2, DNS, company firewall, and whether GitHub Raw is blocked." -ForegroundColor Yellow
     Write-Host "    Detail: $_" -ForegroundColor DarkYellow
     $global:LASTEXITCODE = 1
+    Wait-AfterFailure
     return
 }
 
@@ -69,5 +104,15 @@ catch {
     Write-Host "    This can be caused by a script format change, PowerShell policy, permissions, or a blocked child download." -ForegroundColor Yellow
     Write-Host "    Detail: $_" -ForegroundColor DarkYellow
     $global:LASTEXITCODE = 1
+    Wait-AfterFailure
     return
 }
+
+if ($global:LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "[!] Setup is incomplete. This window will stay open so you can review the messages above." -ForegroundColor Yellow
+    Wait-AfterFailure
+    return
+}
+
+Stop-DiagnosticLog

@@ -46,6 +46,11 @@ assert_file_not_contains(){
   if grep -qF -- "$unwanted" "$ROOT/$file"; then fail "$name (found [$unwanted])"; else pass "$name"; fi
 }
 
+assert_ascii_file(){
+  local file="$1" name="$2"
+  if LC_ALL=C tr -d '\11\12\15\40-\176' < "$ROOT/$file" | grep -q .; then fail "$name (contains non-ASCII bytes)"; else pass "$name"; fi
+}
+
 printf '%s\n' '== macOS behavior =='
 if grep -qF 'INSTALLER_LIB_ONLY' "$ROOT/install.sh"; then
   INSTALLER_LIB_ONLY=1
@@ -138,6 +143,10 @@ printf '%s\n' '== bootstrap and documentation =='
 assert_file_contains 'go.ps1' 'Tls12' 'Windows bootstrap enables TLS 1.2'
 assert_file_contains 'go.ps1' "-notmatch 'function Main'" 'Windows bootstrap validates downloaded installer content'
 assert_file_contains 'go.ps1' 'Installer execution failed' 'Windows bootstrap reports execution failure'
+assert_file_contains 'go.ps1' 'Start-Transcript' 'Windows bootstrap automatically records a diagnostic log'
+assert_file_contains 'go.ps1' 'Read-Host' 'Windows bootstrap pauses after a fatal failure'
+assert_ascii_file 'go.ps1' 'Windows bootstrap remains ASCII-safe for legacy PowerShell'
+assert_file_contains 'README.md' 'cmd /k powershell' 'Windows one-click command keeps the parent window open'
 assert_file_not_contains 'README.md' '有 Homebrew 就自动装' 'README removes stale Homebrew behavior'
 assert_file_not_contains 'README.md' '组长速查.md' 'README does not list missing group-lead guide'
 assert_file_not_contains 'README.md' '直播大纲.md' 'README does not list missing livestream guide'

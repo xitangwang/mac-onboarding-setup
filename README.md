@@ -33,7 +33,15 @@ curl -fsSL https://raw.githubusercontent.com/xitangwang/mac-onboarding-setup/mai
 
 ### Windows
 
-打开 Windows PowerShell 或 Windows Terminal，粘贴：
+按 `Win + R`，粘贴下面这一整行并回车：
+
+```cmd
+cmd /k powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/xitangwang/mac-onboarding-setup/main/go.ps1 | iex"
+```
+
+`cmd /k` 会保留外层窗口：即使 PowerShell 或安装脚本异常退出，错误信息也不会跟着闪退消失。启动器还会在桌面自动生成 `navigator-installer-日期时间.log` 诊断日志；安装失败时会等待按回车后再关闭。
+
+如果已经打开了 Windows PowerShell 或 Windows Terminal，也可以继续使用原命令：
 
 ```powershell
 irm https://raw.githubusercontent.com/xitangwang/mac-onboarding-setup/main/go.ps1 | iex
@@ -41,9 +49,8 @@ irm https://raw.githubusercontent.com/xitangwang/mac-onboarding-setup/main/go.ps
 
 只检测、不安装：
 
-```powershell
-$env:CHECK_ONLY=1
-irm https://raw.githubusercontent.com/xitangwang/mac-onboarding-setup/main/go.ps1 | iex
+```cmd
+cmd /k powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:CHECK_ONLY=1; irm https://raw.githubusercontent.com/xitangwang/mac-onboarding-setup/main/go.ps1 | iex"
 ```
 
 交互提示中：回车表示继续，`s` 表示跳过，`q` 表示退出。安装后建议重开终端再验证。
